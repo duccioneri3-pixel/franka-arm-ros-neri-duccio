@@ -1,0 +1,33 @@
+.env
+.idea
+.vscode
+*.pyc
+COLCON_IGNORE
+!franka_mobile_sensors/COLCON_IGNORE
+AMENT_IGNORE
+cmake-build-*/
+build/
+install/
+log/
+
+# libfranka
+# franka_description
+# olvx_descriptions_module
+
+# local packages to keep out of git
+src/fr3_pick_pipeline/
+src/cube_pose_estimator/
+# --- repo pubblica: solo i miei pacchetti ---
+# spazzatura generata
+yolov8n.pt
+*.pt
+frames_*.gv
+frames_*.pdf
+*.bak_*
+# escludi TUTTO in src tranne i miei due pacchetti
+/src/*
+!/src/cube_detector/
+!/src/cube_planner/
+# cartelle ereditate non mie
+docker/
+images/
