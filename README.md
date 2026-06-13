@@ -14,7 +14,7 @@ This repository contains **only the two packages I developed**:
   estimates its 3D position from the RGB-D point cloud, transforms it into the
   `world` frame, and publishes it on `/cube_pose` (`geometry_msgs/PoseStamped`).
 - **`cube_planner`** (C++): subscribes to `/cube_pose`, builds the MoveIt planning
-  scene (obstacle, table, cube), and executes the pick-and-place sequence
+  scene (obstacle, cube, and a ground/table collision plane), and executes the pick-and-place sequence
   (pre-grasp → approach → grasp → lift → transport → place → release → retreat)
   with `MoveGroupInterface`.
 
@@ -42,6 +42,8 @@ This repository contains **only the two packages I developed**:
     ├── launch/
     │   ├── full_demo.launch.py     # main launch: Gazebo + MoveIt + detector + planner
     │   └── planner.launch.py
+    ├── worlds/
+    │   └── my_world2.sdf           # Gazebo scene: cube, obstacle, target
     ├── CMakeLists.txt
     └── package.xml
 ```
@@ -65,12 +67,14 @@ added to that workspace's `src/`.
    [BernardoBrogi/ROS2_project_franka](https://github.com/BernardoBrogi/ROS2_project_franka).
 
 2. Clone these two packages into the workspace `src/`:
+
 ```bash
    cd <franka_workspace>/src
    git clone https://github.com/duccioneri3-pixel/franka-arm-ros-neri-duccio.git
 ```
 
 3. Install ROS 2 dev tools and dependencies:
+
 ```bash
    sudo apt update
    sudo apt install ros-dev-tools libgtest-dev libgmock-dev
@@ -79,16 +83,18 @@ added to that workspace's `src/`.
 ```
 
 4. **Simulation world.** The pick-and-place scene (cube, obstacle, target) is
-   defined in `my_world2.sdf`, which must be placed in
-   `franka_gazebo_bringup/worlds/`. The Gazebo bringup launch file must load this
-   world (i.e. it references `my_world2.sdf`).
+   defined in `cube_planner/worlds/my_world2.sdf` (included in this repo). Copy it
+   into the base workspace at `franka_gazebo_bringup/worlds/`, and make sure the
+   Gazebo bringup launch file loads it (i.e. it references `my_world2.sdf`).
 
 5. Build and source:
+
 ```bash
    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
    source install/setup.bash
 ```
    If the build seems to freeze, limit parallelism:
+
 ```bash
    colcon build --parallel-workers 2
 ```
@@ -103,6 +109,7 @@ This brings up Gazebo + MoveIt, then starts `cube_detector` and `cube_planner`.
 The robot detects the cube, plans, and executes the full pick-and-place.
 
 Inspect the estimated cube pose:
+
 ```bash
 ros2 topic echo /cube_pose
 ```
@@ -121,8 +128,8 @@ valid 3D points (robust to NaNs and depth noise). The pose is transformed into t
 
 ## Motion planning
 
-`cube_planner` adds the obstacle, table, and cube to the MoveIt planning scene as
-collision objects. At grasp time the cube is **attached** to the gripper
+`cube_planner` adds the obstacle, the cube, and a ground/table collision plane to the
+MoveIt planning scene as collision objects. At grasp time the cube is **attached** to the gripper
 (`fr3_hand`), so MoveIt accounts for its volume during lift and transport, and is
 **detached** at release. The obstacle between the robot and the cube is avoided via
 the MoveIt planning scene (planning around objects).
