@@ -3,14 +3,19 @@
 <package format="3">
   <name>cube_detector</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Red cube detector (HSV + RGB-D point cloud) for Franka FR3 pick-and-place</description>
   <maintainer email="duccio@todo.todo">duccio</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>cv_bridge</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>sensor_msgs_py</depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

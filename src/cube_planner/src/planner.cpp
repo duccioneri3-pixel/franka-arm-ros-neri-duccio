@@ -90,8 +90,23 @@ private:
     goal.trajectory.points.push_back(point);
 
     RCLCPP_INFO(this->get_logger(), "Gripper %s (%.3f)...", label.c_str(), position);
-    gripper_client_->async_send_goal(goal);
-    rclcpp::sleep_for(3s);
+
+    auto send_future = gripper_client_->async_send_goal(goal);
+    if (send_future.wait_for(5s) != std::future_status::ready) {
+      RCLCPP_WARN(this->get_logger(), "Gripper %s: goal non inviato in tempo", label.c_str());
+      return;
+    }
+    auto goal_handle = send_future.get();
+    if (!goal_handle) {
+      RCLCPP_WARN(this->get_logger(), "Gripper %s: goal rifiutato dal server", label.c_str());
+      return;
+    }
+
+    auto result_future = gripper_client_->async_get_result(goal_handle);
+    if (result_future.wait_for(10s) != std::future_status::ready) {
+      RCLCPP_WARN(this->get_logger(), "Gripper %s: timeout sul risultato", label.c_str());
+      return;
+    }
     RCLCPP_INFO(this->get_logger(), "Gripper %s done", label.c_str());
   }
 

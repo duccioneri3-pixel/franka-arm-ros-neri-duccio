@@ -15,15 +15,14 @@ setup(
     zip_safe=True,
     maintainer='duccio',
     maintainer_email='duccio@todo.todo',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='Red cube detector (HSV + RGB-D point cloud) for Franka FR3 pick-and-place',
+    license='MIT',
     extras_require={
         'test': ['pytest'],
     },
     entry_points={
     'console_scripts': [
         'detector_node = cube_detector.detector_node:main',
-        'planner_node = cube_detector.planner_node:main',
     ],
 },
 )
