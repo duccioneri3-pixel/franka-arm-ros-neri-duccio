@@ -1,173 +1,152 @@
-# Industrial Robotics Course Project
+# Franka FR3 — Autonomous Cube Pick-and-Place (ROS 2)
 
-This repository contains the project for the Industrial Robotics course. The system is built around the [Franka ROS 2 environment](https://github.com/frankarobotics/franka_ros2) and is focused on a pick-and-place task in simulation.
+Autonomous pick-and-place of a red cube with a Franka FR3 arm in Gazebo (Ignition),
+using HSV + RGB-D perception and MoveIt 2 for collision-aware motion planning.
 
-## Installation
+The robot detects a red cube, estimates its 3D pose from an RGB-D point cloud,
+plans a grasp, lifts the cube while avoiding an obstacle, and places it on a target.
 
-### Using Docker
+## What this repository contains
 
-If you want to use Docker, copy the docker folder to your local environment, open a terminal inside it, and use the provided scripts:
+This repository contains **only the two packages I developed**:
 
-```bash
-./build.sh
+- **`cube_detector`** (Python): detects the red cube via HSV color segmentation,
+  estimates its 3D position from the RGB-D point cloud, transforms it into the
+  `world` frame, and publishes it on `/cube_pose` (`geometry_msgs/PoseStamped`).
+- **`cube_planner`** (C++): subscribes to `/cube_pose`, builds the MoveIt planning
+  scene (obstacle, table, cube), and executes the pick-and-place sequence
+  (pre-grasp → approach → grasp → lift → transport → place → release → retreat)
+  with `MoveGroupInterface`.
+
+> **Note:** the Franka simulation environment (description, Gazebo bringup, MoveIt
+> config, controllers) is **not** included here. It comes from the project base
+> environment — see *Dependencies* below.
+
+## Repository structure
+
+```text
+.
+├── cube_detector/                  # Python package — red cube detection
+│   ├── cube_detector/
+│   │   ├── __init__.py
+│   │   └── detector_node.py        # HSV detection + RGB-D pose estimation -> /cube_pose
+│   ├── resource/
+│   │   └── cube_detector           # ament package marker
+│   ├── package.xml
+│   ├── setup.py
+│   └── setup.cfg
+│
+└── cube_planner/                   # C++ package — MoveIt 2 pick-and-place
+    ├── src/
+    │   └── planner.cpp             # planning scene + grasp sequence + gripper control
+    ├── launch/
+    │   ├── full_demo.launch.py     # main launch: Gazebo + MoveIt + detector + planner
+    │   └── planner.launch.py
+    ├── CMakeLists.txt
+    └── package.xml
 ```
 
-Build the Docker image.
+## Dependencies
 
+- **ROS 2 Humble**
+- **MoveIt 2**
+- **Gazebo (Ignition)**
+- **Franka ROS 2 environment** — the base simulation this project builds on:
+  [BernardoBrogi/ROS2_project_franka](https://github.com/BernardoBrogi/ROS2_project_franka)
+  (Franka FR3 description, Gazebo world bringup, MoveIt config, RGB-D camera).
+- Upstream Franka packages: [frankarobotics/franka_ros2](https://github.com/frankarobotics/franka_ros2)
+
+## Setup
+
+This project runs **inside the Franka base workspace**. The two packages here are
+added to that workspace's `src/`.
+
+1. Set up the base workspace following its instructions:
+   [BernardoBrogi/ROS2_project_franka](https://github.com/BernardoBrogi/ROS2_project_franka).
+
+2. Clone these two packages into the workspace `src/`:
 ```bash
-./run.sh
+   cd <franka_workspace>/src
+   git clone https://github.com/duccioneri3-pixel/franka-arm-ros-neri-duccio.git
 ```
 
-Start the container for the first time.
-
+3. Install ROS 2 dev tools and dependencies:
 ```bash
-./exec.sh
+   sudo apt update
+   sudo apt install ros-dev-tools libgtest-dev libgmock-dev
+   rosdep update
+   rosdep install --from-paths src --ignore-src --rosdistro humble -y
 ```
 
-Open additional terminals inside the running container.
+4. **Simulation world.** The pick-and-place scene (cube, obstacle, target) is
+   defined in `my_world2.sdf`, which must be placed in
+   `franka_gazebo_bringup/worlds/`. The Gazebo bringup launch file must load this
+   world (i.e. it references `my_world2.sdf`).
 
-The Docker image includes a fresh ROS 2 installation, so once inside the container follow the rest of the setup guidelines to install the required project packages and dependencies.
-
-### Local installation
-
-Update the package index:
+5. Build and source:
 ```bash
-sudo apt update
+   colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+   source install/setup.bash
+```
+   If the build seems to freeze, limit parallelism:
+```bash
+   colcon build --parallel-workers 2
 ```
 
-Install the ROS 2 development tools and the testing libraries used by the project:
+## Running the demo
+
 ```bash
-sudo apt install ros-dev-tools libgtest-dev libgmock-dev
+ros2 launch cube_planner full_demo.launch.py
 ```
 
-Clone the repository:
+This brings up Gazebo + MoveIt, then starts `cube_detector` and `cube_planner`.
+The robot detects the cube, plans, and executes the full pick-and-place.
+
+Inspect the estimated cube pose:
 ```bash
-git clone https://github.com/BernardoBrogi/ROS2_project_franka.git
+ros2 topic echo /cube_pose
 ```
 
-Enter in the ws:
-```bash
-cd ROS2_project_franka
-```
+## Perception
 
-Update rosdep:
-```bash
-rosdep update
-```
+The simulated RGB-D camera publishes:
 
-Install the project dependencies:
-```bash
-rosdep install --from-paths src --ignore-src --rosdistro humble -y
-```
+- RGB image: `/fr3/depth_camera/image`
+- Point cloud: `/fr3/depth_camera/points`
 
-Build the workspace:
-```bash
-# Use --symlink-install to reduce disk usage and simplify development.
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
-```
+`cube_detector` segments the red cube in HSV, takes the bounding-box centroid,
+samples a small window of the point cloud around it, and uses the median of the
+valid 3D points (robust to NaNs and depth noise). The pose is transformed into the
+`world` TF frame before publishing.
 
-If the build appears to freeze, limit parallelism:
-```bash
-colcon build --parallel-workers 2
-```
+## Motion planning
 
-Source the workspace environment:
-```bash
-# Make the newly built ROS 2 packages available in the current shell.
-source install/setup.bash
-```
-
-
-## Project Goal
-
-The objective is to pick up a cube in simulation and place it autonomously inside a container using:
-
-- Gazebo Ignition for the simulated environment
-- MoveIt for motion planning and execution
-- A simulated Intel RealSense RGB-D camera for perception
-
-The robot must be able to detect the object, plan a grasp, pick the cube, and place it into the container without manual intervention.
-
-## Simulation Setup
-
-The simulated world includes:
-
-- A Franka FR3 robotic arm
-- A simulated Intel RealSense RGB-D camera
-
-The camera streams both RGB data and point cloud information. These data streams can be visualized through ROS 2 topics and in RViz.
-
-## Assignment Requirements
-
-Students are expected to implement the following components:
-
-1. A Gazebo world containing the cube, the container, and the obstacle.
-2. A node that reads the camera data and estimates the pose of the cube.
-3. A grasping and manipulation pipeline that uses the estimated pose to pick the cube.
-4. Motion planning that avoids collisions with an obstacle placed between the robot and the cube.
-5. A placement policy that autonomously places the cube inside the container.
-
-## Obstacle Avoidance
-
-Two possible approaches are:
-
-- Use a collision object in the MoveIt planning scene, following the planning-around-objects tutorial.
-- Use the MoveIt perception pipeline with OctoMap to build a 3D occupancy map from camera data and feed it to the planner for collision-aware trajectory generation.
+`cube_planner` adds the obstacle, table, and cube to the MoveIt planning scene as
+collision objects. At grasp time the cube is **attached** to the gripper
+(`fr3_hand`), so MoveIt accounts for its volume during lift and transport, and is
+**detached** at release. The obstacle between the robot and the cube is avoided via
+the MoveIt planning scene (planning around objects).
 
 Reference tutorial:
+https://moveit.picknik.ai/main/doc/tutorials/planning_around_objects/planning_around_objects.html
 
-- https://moveit.picknik.ai/main/doc/tutorials/planning_around_objects/planning_around_objects.html
-- https://moveit.picknik.ai/main/doc/examples/perception_pipeline/perception_pipeline_tutorial.html
+## Notes and known limitations
 
-## Data and Visualization
+- **Gripper.** In this simulation only the `follow_joint_trajectory` action is
+  exposed for the gripper, so grasping is done by closing the fingers to a
+  position. The gripper command waits for the action result (not a fixed delay),
+  so it is robust to slow simulation. On the **real** Franka, force-based grasping
+  via the `franka_gripper` Grasp action would be used instead.
+- **Cube holding in sim.** Because there is no force-based grasp in simulation,
+  high friction on the cube is used to keep it held during transport.
 
-The camera provides:
+## Demo
 
-- RGB images
-- Point clouds
+<!-- Drag-and-drop your simulation videos here when editing this README on GitHub.
+     GitHub will host them and embed a playable link. Keep clips short (~10MB). -->
 
-These outputs are intended to support object recognition, pose estimation, and debugging. RViz can be used to inspect the camera feeds, point cloud data, and the robot scene.
+_Simulation videos to be added._
 
-## Simulation Run Examples
+## License
 
-Use this section to document example commands for starting the simulation, launching the robot stack, and opening RViz.
-
-### Start the full simulation
-
-```bash
-ros2 launch franka_gazebo_bringup moveit_gazebo_franka_arm_example_controller.launch.py
-```
-
-## Environment Setup Examples
-
-### Without Obstacle
-
-Gazebo scene:
-
-<img src="images/gazebo.png" alt="Gazebo environment without obstacle" width="52%"/>
-RViz scene:
-
-![RViz environment without obstacle](images/rviz.png)
-
-### With Obstacle
-
-Gazebo scene with obstacle:
-
-![Gazebo environment with obstacle](images/gazebo_obstacle.png)
-
-## Perception Topics
-
-### Camera Topics
-
-- Depth image topic: `/fr3/depth_camera/points`
-- Point cloud topic: `/fr3/depth_camera/points`
-
-### Suggested RViz Displays
-
-- Camera image
-- Point cloud
-- Robot model
-- TF frames
-
-
-
+MIT — see [LICENSE](LICENSE).
