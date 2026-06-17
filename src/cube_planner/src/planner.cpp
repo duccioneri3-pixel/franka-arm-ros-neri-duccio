@@ -36,7 +36,7 @@ public:
 
     // Offset di movimento (relativi a cz del cubo o tz del target)
     this->declare_parameter("pregrasp_offset", 0.12);
-    this->declare_parameter("grasp_offset", -0.045);
+    this->declare_parameter("grasp_offset", -0.035);
     this->declare_parameter("lift_offset", 0.35);
     this->declare_parameter("transport_offset", 0.45);
     this->declare_parameter("place_offset", 0.06);
