@@ -34,6 +34,18 @@ public:
     this->declare_parameter("target_y", -0.3);
     this->declare_parameter("target_z", 0.02);
 
+    // Offset di movimento (relativi a cz del cubo o tz del target)
+    this->declare_parameter("pregrasp_offset", 0.12);
+    this->declare_parameter("grasp_offset", -0.045);
+    this->declare_parameter("lift_offset", 0.35);
+    this->declare_parameter("transport_offset", 0.45);
+    this->declare_parameter("place_offset", 0.06);
+    this->declare_parameter("retreat_offset", 0.30);
+
+    // Gripper
+    this->declare_parameter("gripper_open", 0.06);
+    this->declare_parameter("gripper_close", 0.0);
+
     gripper_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
       this, "/fr3_gripper/follow_joint_trajectory");
 
@@ -110,8 +122,8 @@ private:
     RCLCPP_INFO(this->get_logger(), "Gripper %s done", label.c_str());
   }
 
-  void openGripper()  { controlGripper(0.06,  "open"); }
-  void closeGripper() { controlGripper(0.000, "close"); }
+  void openGripper()  { controlGripper(this->get_parameter("gripper_open").as_double(),  "open"); }
+  void closeGripper() { controlGripper(this->get_parameter("gripper_close").as_double(), "close"); }
 
   void setupScene(
     moveit::planning_interface::PlanningSceneInterface & psi,
@@ -257,6 +269,13 @@ private:
     double ty = this->get_parameter("target_y").as_double();
     double tz = this->get_parameter("target_z").as_double();
 
+    double pregrasp_off  = this->get_parameter("pregrasp_offset").as_double();
+    double grasp_off     = this->get_parameter("grasp_offset").as_double();
+    double lift_off      = this->get_parameter("lift_offset").as_double();
+    double transport_off = this->get_parameter("transport_offset").as_double();
+    double place_off     = this->get_parameter("place_offset").as_double();
+    double retreat_off   = this->get_parameter("retreat_offset").as_double();
+
     RCLCPP_INFO(this->get_logger(), "Cubo: x=%.3f y=%.3f z=%.3f", cx, cy, cz);
     RCLCPP_INFO(this->get_logger(), "Target: x=%.3f y=%.3f z=%.3f", tx, ty, tz);
 
@@ -270,13 +289,13 @@ private:
 
     // Step 2 — pre-grasp (movePose — piano sicuro)
     RCLCPP_INFO(this->get_logger(), "Step 2: Pre-grasp...");
-    if (!movePose(move_group, makePose(cx, cy, cz + 0.12), "pre-grasp")) return;
+    if (!movePose(move_group, makePose(cx, cy, cz + pregrasp_off), "pre-grasp")) return;
 
     // Step 3 — approach con 2 waypoints: allineati XY poi scendi dritto
     RCLCPP_INFO(this->get_logger(), "Step 3: Approach...");
     std::vector<geometry_msgs::msg::Pose> approach_waypoints = {
-      makePose(cx, cy, cz + 0.12),  // allineati XY stessa quota pre-grasp
-      makePose(cx, cy, cz - 0.045)   // scendi dritto verticale
+      makePose(cx, cy, cz + pregrasp_off),  // allineati XY stessa quota pre-grasp
+      makePose(cx, cy, cz + grasp_off)   // scendi dritto verticale
     };
 
     if (!cartesianMove(move_group, approach_waypoints, "approach")) return;
@@ -292,15 +311,15 @@ private:
 
     // Step 5 — lift (movePose — sali)
     RCLCPP_INFO(this->get_logger(), "Step 5: Lift...");
-    if (!movePose(move_group, makePose(cx, cy, cz + 0.35), "lift")) return;
+    if (!movePose(move_group, makePose(cx, cy, cz + lift_off), "lift")) return;
 
     // Step 6 — transport sopra target (movePose — piano sicuro)
     RCLCPP_INFO(this->get_logger(), "Step 6: Transport...");
-    if (!movePose(move_group, makePose(tx, ty, tz + 0.45), "transport")) return;
+    if (!movePose(move_group, makePose(tx, ty, tz + transport_off), "transport")) return;
 
     // Step 7 — place (movePose — evita il 360°)
     RCLCPP_INFO(this->get_logger(), "Step 7: Place...");
-    if (!movePose(move_group, makePose(tx, ty, tz + 0.06), "place")) return;
+    if (!movePose(move_group, makePose(tx, ty, tz + place_off), "place")) return;
 
     // Step 8 — release
     RCLCPP_INFO(this->get_logger(), "Step 8: Release...");
@@ -310,7 +329,7 @@ private:
 
     // Step 9 — retreat (movePose — piano sicuro)
     RCLCPP_INFO(this->get_logger(), "Step 9: Retreat...");
-    movePose(move_group, makePose(tx, ty, tz + 0.30), "retreat");
+    movePose(move_group, makePose(tx, ty, tz + retreat_off), "retreat");
 
     RCLCPP_INFO(this->get_logger(), "TASK COMPLETATO!");
   }
