@@ -21,9 +21,13 @@
 
 #include "control_msgs/action/follow_joint_trajectory.hpp"
 #include "trajectory_msgs/msg/joint_trajectory_point.hpp"
+#include "franka_msgs/action/grasp.hpp"
+#include "franka_msgs/action/move.hpp"
 
 using namespace std::chrono_literals;
 using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
+using Grasp = franka_msgs::action::Grasp;
+using Move  = franka_msgs::action::Move;
 
 class CubePlanner : public rclcpp::Node
 {
@@ -42,12 +46,29 @@ public:
     this->declare_parameter("transport_offset", 0.45);
     this->declare_parameter("place_offset", 0.06);
     this->declare_parameter("retreat_offset", 0.30);
+    this->declare_parameter("release_lift_offset", 0.15);
 
     this->declare_parameter("gripper_open", 0.06);
     this->declare_parameter("gripper_close", 0.0);
 
+    // --- Gripper reale (Franka): usato solo se use_real_gripper=true ---
+    this->declare_parameter("use_real_gripper", false);
+    this->declare_parameter("real_open_width", 0.08);      // m, apertura Move
+    this->declare_parameter("grasp_width", 0.04);          // m, larghezza cubo
+    this->declare_parameter("gripper_speed", 0.1);         // m/s
+    this->declare_parameter("gripper_force", 20.0);        // N
+    this->declare_parameter("grasp_epsilon_inner", 0.005); // m
+    this->declare_parameter("grasp_epsilon_outer", 0.005); // m
+    this->declare_parameter("move_action_name", "/fr3_gripper/move");
+    this->declare_parameter("grasp_action_name", "/fr3_gripper/grasp");
+
     gripper_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
       this, "/fr3_gripper/follow_joint_trajectory");
+
+    move_client_ = rclcpp_action::create_client<Move>(
+      this, this->get_parameter("move_action_name").as_string());
+    grasp_client_ = rclcpp_action::create_client<Grasp>(
+      this, this->get_parameter("grasp_action_name").as_string());
 
     cube_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
       "/cube_pose", 10,
@@ -154,6 +175,12 @@ public:
     openGripper();
     rclcpp::sleep_for(1s);
 
+    double release_lift_off = this->get_parameter("release_lift_offset").as_double();
+    RCLCPP_INFO(this->get_logger(), "Step 8.5: Post-release lift (esce dalle dita)...");
+    if (!movePose(move_group, makePose(tx, ty, tz + place_off + release_lift_off), "post-release-lift")) {
+      RCLCPP_WARN(this->get_logger(), "Post-release lift fallito, provo retreat comunque");
+    }
+
     RCLCPP_INFO(this->get_logger(), "Step 9: Retreat...");
     movePose(move_group, makePose(tx, ty, tz + retreat_off), "retreat");
 
@@ -164,6 +191,8 @@ private:
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr cube_sub_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_client_;
+  rclcpp_action::Client<Move>::SharedPtr  move_client_;
+  rclcpp_action::Client<Grasp>::SharedPtr grasp_client_;
   geometry_msgs::msg::PoseStamped cube_pose_;
   bool cube_received_;
   std::mutex cube_mutex_;
@@ -224,8 +253,86 @@ private:
     RCLCPP_INFO(this->get_logger(), "Gripper %s done", label.c_str());
   }
 
-  void openGripper()  { controlGripper(this->get_parameter("gripper_open").as_double(),  "open"); }
-  void closeGripper() { controlGripper(this->get_parameter("gripper_close").as_double(), "close"); }
+  void openGripper()
+  {
+    if (this->get_parameter("use_real_gripper").as_bool()) {
+      realMove(this->get_parameter("real_open_width").as_double(), "open");
+    } else {
+      controlGripper(this->get_parameter("gripper_open").as_double(), "open");
+    }
+  }
+
+  void closeGripper()
+  {
+    if (this->get_parameter("use_real_gripper").as_bool()) {
+      realGrasp(this->get_parameter("grasp_width").as_double(), "close");
+    } else {
+      controlGripper(this->get_parameter("gripper_close").as_double(), "close");
+    }
+  }
+
+  // --- Percorso REALE: Move (open) e Grasp in forza (close) ---
+  // Stesso pattern event-driven di controlGripper: attende il server, invia il
+  // goal, attende handle e result, con timeout di sicurezza (non attese fisse).
+  void realMove(double width, const std::string & label)
+  {
+    if (!move_client_->wait_for_action_server(3s)) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Move server non disponibile, salto %s", label.c_str());
+      return;
+    }
+    auto goal = Move::Goal();
+    goal.width = width;
+    goal.speed = this->get_parameter("gripper_speed").as_double();
+    RCLCPP_INFO(this->get_logger(), "[REALE] Move %s (width=%.3f)...", label.c_str(), width);
+    auto send_future = move_client_->async_send_goal(goal);
+    if (send_future.wait_for(5s) != std::future_status::ready) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Move %s: goal non inviato in tempo", label.c_str());
+      return;
+    }
+    auto goal_handle = send_future.get();
+    if (!goal_handle) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Move %s: goal rifiutato", label.c_str());
+      return;
+    }
+    auto result_future = move_client_->async_get_result(goal_handle);
+    if (result_future.wait_for(10s) != std::future_status::ready) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Move %s: timeout sul risultato", label.c_str());
+      return;
+    }
+    RCLCPP_INFO(this->get_logger(), "[REALE] Move %s done", label.c_str());
+  }
+
+  void realGrasp(double width, const std::string & label)
+  {
+    if (!grasp_client_->wait_for_action_server(3s)) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Grasp server non disponibile, salto %s", label.c_str());
+      return;
+    }
+    auto goal = Grasp::Goal();
+    goal.width = width;
+    goal.speed = this->get_parameter("gripper_speed").as_double();
+    goal.force = this->get_parameter("gripper_force").as_double();
+    goal.epsilon.inner = this->get_parameter("grasp_epsilon_inner").as_double();
+    goal.epsilon.outer = this->get_parameter("grasp_epsilon_outer").as_double();
+    RCLCPP_INFO(this->get_logger(),
+      "[REALE] Grasp %s (width=%.3f force=%.1fN)...", label.c_str(), width, goal.force);
+    auto send_future = grasp_client_->async_send_goal(goal);
+    if (send_future.wait_for(5s) != std::future_status::ready) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Grasp %s: goal non inviato in tempo", label.c_str());
+      return;
+    }
+    auto goal_handle = send_future.get();
+    if (!goal_handle) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Grasp %s: goal rifiutato", label.c_str());
+      return;
+    }
+    auto result_future = grasp_client_->async_get_result(goal_handle);
+    if (result_future.wait_for(10s) != std::future_status::ready) {
+      RCLCPP_WARN(this->get_logger(), "[REALE] Grasp %s: timeout sul risultato", label.c_str());
+      return;
+    }
+    RCLCPP_INFO(this->get_logger(), "[REALE] Grasp %s done", label.c_str());
+  }
 
   void setupScene(
     moveit::planning_interface::PlanningSceneInterface & psi,
