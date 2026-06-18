@@ -1,6 +1,8 @@
 #include <memory>
 #include <vector>
 #include <chrono>
+#include <mutex>
+#include <thread>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -34,7 +36,6 @@ public:
     this->declare_parameter("target_y", -0.3);
     this->declare_parameter("target_z", 0.02);
 
-    // Offset di movimento (relativi a cz del cubo o tz del target)
     this->declare_parameter("pregrasp_offset", 0.12);
     this->declare_parameter("grasp_offset", -0.035);
     this->declare_parameter("lift_offset", 0.35);
@@ -42,7 +43,6 @@ public:
     this->declare_parameter("place_offset", 0.06);
     this->declare_parameter("retreat_offset", 0.30);
 
-    // Gripper
     this->declare_parameter("gripper_open", 0.06);
     this->declare_parameter("gripper_close", 0.0);
 
@@ -53,22 +53,124 @@ public:
       "/cube_pose", 10,
       std::bind(&CubePlanner::cubeCallback, this, std::placeholders::_1));
 
-    timer_ = this->create_wall_timer(
-      5s, std::bind(&CubePlanner::runTask, this));
+    RCLCPP_INFO(this->get_logger(), "CubePlanner avviato, attendo /cube_pose...");
+  }
 
-    RCLCPP_INFO(this->get_logger(), "CubePlanner avviato, attendo 5s e /cube_pose...");
+  // Aspetta la prima posa del cubo (bloccante, con timeout di sicurezza).
+  // Chiamato dal main thread, mentre l'executor gira nel suo thread.
+  bool waitForCube(std::chrono::seconds timeout = 120s)
+  {
+    auto start = std::chrono::steady_clock::now();
+    rclcpp::Rate rate(10);
+    while (rclcpp::ok()) {
+      {
+        std::lock_guard<std::mutex> lock(cube_mutex_);
+        if (cube_received_) {
+          return true;
+        }
+      }
+      if (std::chrono::steady_clock::now() - start > timeout) {
+        RCLCPP_ERROR(this->get_logger(), "Timeout: nessuna posa cubo ricevuta");
+        return false;
+      }
+      rate.sleep();
+    }
+    return false;
+  }
+
+  void executePickPlace()
+  {
+    // move_group costruito UNA volta, qui, con l'executor gia' in spinning
+    moveit::planning_interface::MoveGroupInterface move_group(shared_from_this(), "fr3_arm");
+    moveit::planning_interface::PlanningSceneInterface psi;
+
+    move_group.setPlanningTime(15.0);
+    move_group.setNumPlanningAttempts(10);
+    move_group.setMaxVelocityScalingFactor(0.2);
+    move_group.setMaxAccelerationScalingFactor(0.2);
+    move_group.setPoseReferenceFrame("world");
+    move_group.allowReplanning(true);
+    move_group.setGoalPositionTolerance(0.01);
+    move_group.setGoalOrientationTolerance(0.01);
+
+    // copia thread-safe della posa cubo
+    geometry_msgs::msg::PoseStamped cube;
+    {
+      std::lock_guard<std::mutex> lock(cube_mutex_);
+      cube = cube_pose_;
+    }
+    double cx = cube.pose.position.x;
+    double cy = cube.pose.position.y;
+    double cz = cube.pose.position.z;
+    double tx = this->get_parameter("target_x").as_double();
+    double ty = this->get_parameter("target_y").as_double();
+    double tz = this->get_parameter("target_z").as_double();
+
+    double pregrasp_off  = this->get_parameter("pregrasp_offset").as_double();
+    double grasp_off     = this->get_parameter("grasp_offset").as_double();
+    double lift_off      = this->get_parameter("lift_offset").as_double();
+    double transport_off = this->get_parameter("transport_offset").as_double();
+    double place_off     = this->get_parameter("place_offset").as_double();
+    double retreat_off   = this->get_parameter("retreat_offset").as_double();
+
+    RCLCPP_INFO(this->get_logger(), "Cubo: x=%.3f y=%.3f z=%.3f", cx, cy, cz);
+    RCLCPP_INFO(this->get_logger(), "Target: x=%.3f y=%.3f z=%.3f", tx, ty, tz);
+
+    setupScene(psi, cx, cy, cz);
+    rclcpp::sleep_for(1s);
+
+    RCLCPP_INFO(this->get_logger(), "Step 1: Open gripper...");
+    openGripper();
+
+    RCLCPP_INFO(this->get_logger(), "Step 2: Pre-grasp...");
+    if (!movePose(move_group, makePose(cx, cy, cz + pregrasp_off), "pre-grasp")) return;
+
+    RCLCPP_INFO(this->get_logger(), "Step 3: Approach...");
+    std::vector<geometry_msgs::msg::Pose> approach_waypoints = {
+      makePose(cx, cy, cz + pregrasp_off),
+      makePose(cx, cy, cz + grasp_off)
+    };
+    if (!cartesianMove(move_group, approach_waypoints, "approach")) return;
+
+    RCLCPP_INFO(this->get_logger(), "Step 4: Grasp...");
+    closeGripper();
+    std::vector<std::string> touch_links = {"fr3_hand", "fr3_leftfinger", "fr3_rightfinger"};
+    if (!move_group.attachObject("cube", "fr3_hand", touch_links)) {
+      RCLCPP_ERROR(this->get_logger(), "Attach del cubo FALLITO");
+    }
+    rclcpp::sleep_for(1s);
+
+    RCLCPP_INFO(this->get_logger(), "Step 5: Lift...");
+    if (!movePose(move_group, makePose(cx, cy, cz + lift_off), "lift")) return;
+
+    RCLCPP_INFO(this->get_logger(), "Step 6: Transport...");
+    if (!movePose(move_group, makePose(tx, ty, tz + transport_off), "transport")) return;
+
+    RCLCPP_INFO(this->get_logger(), "Step 7: Place...");
+    if (!movePose(move_group, makePose(tx, ty, tz + place_off), "place")) return;
+
+    RCLCPP_INFO(this->get_logger(), "Step 8: Release...");
+    move_group.detachObject("cube");
+    openGripper();
+    rclcpp::sleep_for(1s);
+
+    RCLCPP_INFO(this->get_logger(), "Step 9: Retreat...");
+    movePose(move_group, makePose(tx, ty, tz + retreat_off), "retreat");
+
+    RCLCPP_INFO(this->get_logger(), "TASK COMPLETATO!");
   }
 
 private:
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr cube_sub_;
-  rclcpp::TimerBase::SharedPtr timer_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_client_;
   geometry_msgs::msg::PoseStamped cube_pose_;
   bool cube_received_;
+  std::mutex cube_mutex_;
 
   void cubeCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
   {
+    std::lock_guard<std::mutex> lock(cube_mutex_);
     cube_pose_ = *msg;
     cube_received_ = true;
   }
@@ -131,7 +233,6 @@ private:
   {
     std::vector<moveit_msgs::msg::CollisionObject> objects;
 
-    // Ostacolo — 0.5x0.2x0.40 @ (0.5, 0.0, 0.15)
     moveit_msgs::msg::CollisionObject obstacle;
     obstacle.id = "obstacle";
     obstacle.header.frame_id = "world";
@@ -148,7 +249,6 @@ private:
     obstacle.operation = obstacle.ADD;
     objects.push_back(obstacle);
 
-    // Tavolo
     moveit_msgs::msg::CollisionObject table;
     table.id = "table";
     table.header.frame_id = "world";
@@ -165,7 +265,6 @@ private:
     table.operation = table.ADD;
     objects.push_back(table);
 
-    // Cubo
     moveit_msgs::msg::CollisionObject cube;
     cube.id = "cube";
     cube.header.frame_id = "world";
@@ -206,7 +305,6 @@ private:
     return true;
   }
 
-  // cartesianMove con lista di waypoints
   bool cartesianMove(
     moveit::planning_interface::MoveGroupInterface & mg,
     const std::vector<geometry_msgs::msg::Pose> & waypoints,
@@ -231,107 +329,12 @@ private:
     return true;
   }
 
-  // overload singolo waypoint
   bool cartesianMove(
     moveit::planning_interface::MoveGroupInterface & mg,
     const geometry_msgs::msg::Pose & target,
     const std::string & label)
   {
     return cartesianMove(mg, std::vector<geometry_msgs::msg::Pose>{target}, label);
-  }
-
-  void runTask()
-  {
-    timer_->cancel();
-
-    if (!cube_received_) {
-      RCLCPP_WARN(this->get_logger(), "Cubo non ancora rilevato, riprovo tra 2s...");
-      timer_ = this->create_wall_timer(2s, std::bind(&CubePlanner::runTask, this));
-      return;
-    }
-
-    moveit::planning_interface::MoveGroupInterface move_group(shared_from_this(), "fr3_arm");
-    moveit::planning_interface::PlanningSceneInterface psi;
-
-    move_group.setPlanningTime(15.0);
-    move_group.setNumPlanningAttempts(10);
-    move_group.setMaxVelocityScalingFactor(0.2);
-    move_group.setMaxAccelerationScalingFactor(0.2);
-    move_group.setPoseReferenceFrame("world");
-    move_group.allowReplanning(true);
-    move_group.setGoalPositionTolerance(0.01);
-    move_group.setGoalOrientationTolerance(0.01);
-
-    double cx = cube_pose_.pose.position.x;
-    double cy = cube_pose_.pose.position.y;
-    double cz = cube_pose_.pose.position.z;
-    double tx = this->get_parameter("target_x").as_double();
-    double ty = this->get_parameter("target_y").as_double();
-    double tz = this->get_parameter("target_z").as_double();
-
-    double pregrasp_off  = this->get_parameter("pregrasp_offset").as_double();
-    double grasp_off     = this->get_parameter("grasp_offset").as_double();
-    double lift_off      = this->get_parameter("lift_offset").as_double();
-    double transport_off = this->get_parameter("transport_offset").as_double();
-    double place_off     = this->get_parameter("place_offset").as_double();
-    double retreat_off   = this->get_parameter("retreat_offset").as_double();
-
-    RCLCPP_INFO(this->get_logger(), "Cubo: x=%.3f y=%.3f z=%.3f", cx, cy, cz);
-    RCLCPP_INFO(this->get_logger(), "Target: x=%.3f y=%.3f z=%.3f", tx, ty, tz);
-
-    // Configura scena
-    setupScene(psi, cx, cy, cz);
-    rclcpp::sleep_for(1s);
-
-    // Step 1 — apri gripper
-    RCLCPP_INFO(this->get_logger(), "Step 1: Open gripper...");
-    openGripper();
-
-    // Step 2 — pre-grasp (movePose — piano sicuro)
-    RCLCPP_INFO(this->get_logger(), "Step 2: Pre-grasp...");
-    if (!movePose(move_group, makePose(cx, cy, cz + pregrasp_off), "pre-grasp")) return;
-
-    // Step 3 — approach con 2 waypoints: allineati XY poi scendi dritto
-    RCLCPP_INFO(this->get_logger(), "Step 3: Approach...");
-    std::vector<geometry_msgs::msg::Pose> approach_waypoints = {
-      makePose(cx, cy, cz + pregrasp_off),  // allineati XY stessa quota pre-grasp
-      makePose(cx, cy, cz + grasp_off)   // scendi dritto verticale
-    };
-
-    if (!cartesianMove(move_group, approach_waypoints, "approach")) return;
-
-    // Step 4 — grasp
-    RCLCPP_INFO(this->get_logger(), "Step 4: Grasp...");
-    closeGripper();
-    std::vector<std::string> touch_links = {"fr3_hand", "fr3_leftfinger", "fr3_rightfinger"};
-    if (!move_group.attachObject("cube", "fr3_hand", touch_links)) {
-      RCLCPP_ERROR(this->get_logger(), "Attach del cubo FALLITO");
-    }
-    rclcpp::sleep_for(1s);
-
-    // Step 5 — lift (movePose — sali)
-    RCLCPP_INFO(this->get_logger(), "Step 5: Lift...");
-    if (!movePose(move_group, makePose(cx, cy, cz + lift_off), "lift")) return;
-
-    // Step 6 — transport sopra target (movePose — piano sicuro)
-    RCLCPP_INFO(this->get_logger(), "Step 6: Transport...");
-    if (!movePose(move_group, makePose(tx, ty, tz + transport_off), "transport")) return;
-
-    // Step 7 — place (movePose — evita il 360°)
-    RCLCPP_INFO(this->get_logger(), "Step 7: Place...");
-    if (!movePose(move_group, makePose(tx, ty, tz + place_off), "place")) return;
-
-    // Step 8 — release
-    RCLCPP_INFO(this->get_logger(), "Step 8: Release...");
-    move_group.detachObject("cube");
-    openGripper();
-    rclcpp::sleep_for(1s);
-
-    // Step 9 — retreat (movePose — piano sicuro)
-    RCLCPP_INFO(this->get_logger(), "Step 9: Retreat...");
-    movePose(move_group, makePose(tx, ty, tz + retreat_off), "retreat");
-
-    RCLCPP_INFO(this->get_logger(), "TASK COMPLETATO!");
   }
 };
 
@@ -344,10 +347,19 @@ int main(int argc, char ** argv)
 
   auto node = std::make_shared<CubePlanner>(options);
 
+  // Executor in un thread SEPARATO: non blocca il main, processa i callback
+  // (inclusi i future del gripper) mentre il task gira.
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node);
-  executor.spin();
+  std::thread spinner([&executor]() { executor.spin(); });
 
+  // Il task gira nel main thread, in modo lineare.
+  if (node->waitForCube()) {
+    node->executePickPlace();
+  }
+
+  executor.cancel();
+  spinner.join();
   rclcpp::shutdown();
   return 0;
 }
