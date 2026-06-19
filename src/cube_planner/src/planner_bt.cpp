@@ -228,6 +228,29 @@ public:
     return true;
   }
 
+  // Porta il braccio alla posa di ready nota (giunti espliciti, no IK).
+  // Usata come recovery: stato sicuro e deterministico dopo un fallimento.
+  bool goHome()
+  {
+    RCLCPP_INFO(get_logger(), "[RECOVERY] GoHome: ritorno alla posa di ready...");
+    std::vector<double> ready = {0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398};
+    move_group_->setJointValueTarget(ready);
+    int retries = static_cast<int>(get_parameter("planning_retries").as_int());
+    if (retries < 1) retries = 1;
+    MoveGroupInterface::Plan plan;
+    bool planned = false;
+    for (int attempt = 1; attempt <= retries; ++attempt) {
+      if (move_group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS) { planned = true; break; }
+      RCLCPP_WARN(get_logger(), "[RECOVERY] GoHome piano fallito (tentativo %d/%d)", attempt, retries);
+    }
+    if (!planned) { RCLCPP_ERROR(get_logger(), "[RECOVERY] GoHome: pianificazione fallita"); return false; }
+    if (move_group_->execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
+      RCLCPP_ERROR(get_logger(), "[RECOVERY] GoHome: esecuzione fallita"); return false;
+    }
+    RCLCPP_INFO(get_logger(), "[RECOVERY] GoHome OK - robot in posa sicura");
+    return true;
+  }
+
 private:
   void cubeCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
   {
@@ -381,25 +404,39 @@ public:
   }
 };
 
+class GoHome : public BT::SyncActionNode {
+public:
+  GoHome(const std::string & n, const BT::NodeConfig & c) : BT::SyncActionNode(n, c) {}
+  static BT::PortsList providedPorts() { return {}; }
+  BT::NodeStatus tick() override { return BT_OK(rosOf(*this)->goHome()); }
+};
+
 // Albero: l'intera sequenza pick-and-place, leggibile a colpo d'occhio.
 static const char* xml_tree = R"(
 <root BTCPP_format="4">
   <BehaviorTree ID="MainTree">
-    <Sequence name="pick_and_place">
-      <SetupScene/>
-      <OpenGripper/>
-      <PreGrasp/>
-      <Approach/>
-      <CloseGripper/>
-      <AttachCube/>
-      <Lift/>
-      <Transport/>
-      <Place/>
-      <DetachCube/>
-      <OpenGripper/>
-      <ReleaseLift/>
-      <Retreat/>
-    </Sequence>
+    <Fallback name="task_with_recovery">
+      <Sequence name="pick_and_place">
+        <SetupScene/>
+        <OpenGripper/>
+        <PreGrasp/>
+        <Approach/>
+        <CloseGripper/>
+        <AttachCube/>
+        <Lift/>
+        <Transport/>
+        <Place/>
+        <DetachCube/>
+        <OpenGripper/>
+        <ReleaseLift/>
+        <Retreat/>
+      </Sequence>
+      <Sequence name="recovery">
+        <DetachCube/>
+        <OpenGripper/>
+        <GoHome/>
+      </Sequence>
+    </Fallback>
   </BehaviorTree>
 </root>
 )";
@@ -430,6 +467,7 @@ int main(int argc, char ** argv)
   factory.registerNodeType<Place>("Place");
   factory.registerNodeType<ReleaseLift>("ReleaseLift");
   factory.registerNodeType<Retreat>("Retreat");
+  factory.registerNodeType<GoHome>("GoHome");
 
   auto tree = factory.createTreeFromText(xml_tree);
   tree.rootBlackboard()->set("ros_node", ros_node);
