@@ -16,6 +16,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(franka_msgs REQUIRED)
 
 add_executable(planner_node src/planner.cpp)
 
@@ -30,6 +31,7 @@ ament_target_dependencies(planner_node
   tf2_geometry_msgs
   trajectory_msgs
   control_msgs
+  franka_msgs
 )
 
 install(TARGETS planner_node
