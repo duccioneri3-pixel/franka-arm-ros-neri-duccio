@@ -46,6 +46,8 @@ public:
     this->declare_parameter("transport_offset", 0.45);
     this->declare_parameter("place_offset", 0.06);
     this->declare_parameter("retreat_offset", 0.30);
+
+    this->declare_parameter("planning_retries", 3);  // tentativi di pianificazione per ogni movePose
     this->declare_parameter("release_lift_offset", 0.15);
 
     this->declare_parameter("gripper_open", 0.06);
@@ -398,12 +400,32 @@ private:
     const geometry_msgs::msg::Pose & target,
     const std::string & label)
   {
+    int retries = static_cast<int>(this->get_parameter("planning_retries").as_int());
+    if (retries < 1) retries = 1;
+
     mg.setPoseTarget(target);
     moveit::planning_interface::MoveGroupInterface::Plan plan;
-    if (mg.plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
-      RCLCPP_ERROR(this->get_logger(), "Piano [%s] FALLITO", label.c_str());
+
+    bool planned = false;
+    for (int attempt = 1; attempt <= retries; ++attempt) {
+      if (mg.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS) {
+        planned = true;
+        if (attempt > 1) {
+          RCLCPP_INFO(this->get_logger(),
+            "Piano [%s] riuscito al tentativo %d/%d", label.c_str(), attempt, retries);
+        }
+        break;
+      }
+      RCLCPP_WARN(this->get_logger(),
+        "Piano [%s] fallito (tentativo %d/%d)", label.c_str(), attempt, retries);
+    }
+
+    if (!planned) {
+      RCLCPP_ERROR(this->get_logger(),
+        "Piano [%s] FALLITO dopo %d tentativi", label.c_str(), retries);
       return false;
     }
+
     if (mg.execute(plan) != moveit::core::MoveItErrorCode::SUCCESS) {
       RCLCPP_ERROR(this->get_logger(), "Esecuzione [%s] FALLITA", label.c_str());
       return false;
