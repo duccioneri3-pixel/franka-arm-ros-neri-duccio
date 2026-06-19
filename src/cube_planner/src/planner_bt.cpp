@@ -351,7 +351,14 @@ public:
   BT::NodeStatus tick() override {
     auto r = rosOf(*this); auto cube = r->cubePose();
     double cx = cube.pose.position.x, cy = cube.pose.position.y, cz = cube.pose.position.z;
-    return BT_OK(r->movePose(r->makePose(cx, cy, cz + r->p("lift_offset")), "lift"));
+    // Lift come movimento CARTESIANO verticale (deterministico, no RRTConnect):
+    // dalla posa di grasp sale dritto. cartesianMove ha gia' fallback su movePose
+    // se il percorso rettilineo non e' valido.
+    std::vector<geometry_msgs::msg::Pose> wp = {
+      r->makePose(cx, cy, cz + r->p("grasp_offset")),
+      r->makePose(cx, cy, cz + r->p("lift_offset"))
+    };
+    return BT_OK(r->cartesianMove(wp, "lift"));
   }
 };
 
@@ -430,6 +437,7 @@ static const char* xml_tree = R"(
         <OpenGripper/>
         <ReleaseLift/>
         <Retreat/>
+        <GoHome/>
       </Sequence>
       <Sequence name="recovery">
         <DetachCube/>
