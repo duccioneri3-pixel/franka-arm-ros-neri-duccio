@@ -3,7 +3,8 @@
 import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, TimerAction, SetEnvironmentVariable
+from launch.actions import IncludeLaunchDescription, TimerAction, SetEnvironmentVariable, DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import yaml
@@ -93,13 +94,20 @@ def generate_launch_description():
                     robot_description,
                     robot_description_semantic,
                     kinematics,
+                    {'transport_offset': LaunchConfiguration('transport_offset')},
                 ],
                 output='screen',
             )
         ]
     )
 
+    declare_transport = DeclareLaunchArgument(
+        'transport_offset', default_value='0.45',
+        description='Offset verticale di trasporto (default 0.45; usare valore assurdo per forzare il recovery)'
+    )
+
     return LaunchDescription([
+        declare_transport,
         set_libgl,
         set_mesa,
         gazebo_moveit,
