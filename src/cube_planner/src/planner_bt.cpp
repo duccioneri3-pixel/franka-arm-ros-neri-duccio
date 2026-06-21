@@ -14,6 +14,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
 #include "moveit/move_group_interface/move_group_interface.h"
 #include "moveit/planning_scene_interface/planning_scene_interface.h"
 #include "moveit_msgs/msg/collision_object.hpp"
@@ -68,11 +69,21 @@ public:
     declare_parameter("home_joint_positions",
       std::vector<double>{0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398});
 
+    // Verifica della presa: dopo la chiusura, la larghezza del gripper deve
+    // essere vicina a cube_size (dita ferme sull'oggetto). Se vicina a 0, il
+    // gripper si e' chiuso a vuoto -> presa fallita. Tolleranza configurabile.
+    declare_parameter("grasp_check_tolerance", 0.015);  // m, scarto ammesso da cube_size
+    declare_parameter("grasp_check_enabled", true);     // disattivabile se serve
+
     gripper_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
       this, "/fr3_gripper/follow_joint_trajectory");
     cube_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       "/cube_pose", 10,
       std::bind(&BtRosNode::cubeCallback, this, std::placeholders::_1));
+
+    js_sub_ = create_subscription<sensor_msgs::msg::JointState>(
+      "/joint_states", 10,
+      std::bind(&BtRosNode::jointStateCallback, this, std::placeholders::_1));
 
     RCLCPP_INFO(get_logger(), "BtRosNode avviato");
   }
@@ -110,6 +121,16 @@ public:
   {
     std::lock_guard<std::mutex> lock(cube_mutex_);
     return cube_pose_;
+  }
+
+  // Larghezza di apertura del gripper = somma dei due semi-spostamenti delle dita.
+  // Letta da /joint_states cercando i giunti PER NOME (l'ordine nel messaggio
+  // non e' garantito). Ritorna -1 se non ancora disponibile.
+  double gripperWidth()
+  {
+    std::lock_guard<std::mutex> lock(js_mutex_);
+    if (!js_received_) return -1.0;
+    return finger1_ + finger2_;
   }
 
   double p(const std::string & name) { return get_parameter(name).as_double(); }
@@ -230,6 +251,36 @@ public:
     move_group_->detachObject("cube"); rclcpp::sleep_for(500ms); return true;
   }
 
+  // Verifica sensoriale della presa: confronta la larghezza misurata del
+  // gripper con la dimensione attesa del cubo. Larghezza ~ cube_size -> dita
+  // ferme sull'oggetto (presa OK); larghezza ~ 0 -> chiuso a vuoto (fallita).
+  // NB: in simulazione la larghezza segue il comando di posizione piu' che la
+  // presenza fisica del cubo; la logica e' corretta e pronta per il reale.
+  bool checkGrasp()
+  {
+    if (!get_parameter("grasp_check_enabled").as_bool()) {
+      RCLCPP_INFO(get_logger(), "[grasp-check] disabilitato, salto la verifica");
+      return true;
+    }
+    double width = gripperWidth();
+    if (width < 0.0) {
+      RCLCPP_WARN(get_logger(), "[grasp-check] larghezza non disponibile (/joint_states), salto");
+      return true;  // non blocchiamo se il dato manca
+    }
+    double expected = get_parameter("cube_size").as_double();
+    double tol = get_parameter("grasp_check_tolerance").as_double();
+    RCLCPP_INFO(get_logger(),
+      "[grasp-check] larghezza=%.4f m, attesa~%.4f m (tol %.4f)", width, expected, tol);
+    if (std::abs(width - expected) <= tol) {
+      RCLCPP_INFO(get_logger(), "[grasp-check] presa VERIFICATA");
+      return true;
+    }
+    RCLCPP_ERROR(get_logger(),
+      "[grasp-check] presa NON valida (larghezza %.4f lontana da %.4f) -> fallimento",
+      width, expected);
+    return false;
+  }
+
   bool moveGripper(double position, const std::string & label)
   {
     if (!gripper_client_->wait_for_action_server(3s)) {
@@ -291,6 +342,16 @@ private:
     cube_pose_ = *msg; cube_received_ = true;
   }
 
+  void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg)
+  {
+    std::lock_guard<std::mutex> lock(js_mutex_);
+    for (size_t i = 0; i < msg->name.size(); ++i) {
+      if (msg->name[i] == "fr3_finger_joint1") finger1_ = msg->position[i];
+      else if (msg->name[i] == "fr3_finger_joint2") finger2_ = msg->position[i];
+    }
+    js_received_ = true;
+  }
+
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr cube_sub_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_client_;
   std::shared_ptr<MoveGroupInterface> move_group_;
@@ -298,6 +359,11 @@ private:
   geometry_msgs::msg::PoseStamped cube_pose_;
   bool cube_received_;
   std::mutex cube_mutex_;
+
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr js_sub_;
+  double finger1_ = 0.0, finger2_ = 0.0;
+  bool js_received_ = false;
+  std::mutex js_mutex_;
 };
 
 // =========================================================================
@@ -368,6 +434,13 @@ public:
   AttachCube(const std::string & n, const BT::NodeConfig & c) : BT::SyncActionNode(n, c) {}
   static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus tick() override { return BT_OK(rosOf(*this)->attachCube()); }
+};
+
+class CheckGrasp : public BT::SyncActionNode {
+public:
+  CheckGrasp(const std::string & n, const BT::NodeConfig & c) : BT::SyncActionNode(n, c) {}
+  static BT::PortsList providedPorts() { return {}; }
+  BT::NodeStatus tick() override { return BT_OK(rosOf(*this)->checkGrasp()); }
 };
 
 class DetachCube : public BT::SyncActionNode {
@@ -463,6 +536,7 @@ static const char* xml_tree = R"(
         <Approach/>
         <CloseGripper/>
         <AttachCube/>
+        <CheckGrasp/>
         <Lift/>
         <Transport/>
         <Place/>
@@ -502,6 +576,7 @@ int main(int argc, char ** argv)
   factory.registerNodeType<PreGrasp>("PreGrasp");
   factory.registerNodeType<Approach>("Approach");
   factory.registerNodeType<AttachCube>("AttachCube");
+  factory.registerNodeType<CheckGrasp>("CheckGrasp");
   factory.registerNodeType<DetachCube>("DetachCube");
   factory.registerNodeType<Lift>("Lift");
   factory.registerNodeType<Transport>("Transport");
