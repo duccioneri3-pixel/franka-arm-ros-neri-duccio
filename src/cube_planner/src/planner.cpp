@@ -50,6 +50,15 @@ public:
     this->declare_parameter("planning_retries", 3);  // tentativi di pianificazione per ogni movePose
     this->declare_parameter("release_lift_offset", 0.15);
 
+    // --- Parametri di scena (configurabili sim/reale) ---
+    // Default identici alla scena di simulazione. Per l'hardware reale,
+    // sovrascrivere via file YAML con le misure del laboratorio.
+    this->declare_parameter("obstacle_dimensions", std::vector<double>{0.5, 0.2, 0.40});
+    this->declare_parameter("obstacle_position",   std::vector<double>{0.5, 0.0, 0.15});
+    this->declare_parameter("table_dimensions",    std::vector<double>{1.2, 1.2, 0.02});
+    this->declare_parameter("table_position",      std::vector<double>{0.5, 0.0, -0.01});
+    this->declare_parameter("cube_size", 0.04);
+
     this->declare_parameter("gripper_open", 0.06);
     this->declare_parameter("gripper_close", 0.0);
 
@@ -342,53 +351,35 @@ private:
   {
     std::vector<moveit_msgs::msg::CollisionObject> objects;
 
-    moveit_msgs::msg::CollisionObject obstacle;
-    obstacle.id = "obstacle";
-    obstacle.header.frame_id = "world";
-    shape_msgs::msg::SolidPrimitive obs_prim;
-    obs_prim.type = obs_prim.BOX;
-    obs_prim.dimensions = {0.5, 0.2, 0.40};
-    geometry_msgs::msg::Pose obs_pose;
-    obs_pose.position.x = 0.5;
-    obs_pose.position.y = 0.0;
-    obs_pose.position.z = 0.15;
-    obs_pose.orientation.w = 1.0;
-    obstacle.primitives.push_back(obs_prim);
-    obstacle.primitive_poses.push_back(obs_pose);
-    obstacle.operation = obstacle.ADD;
-    objects.push_back(obstacle);
+    // Helper per aggiungere un box alla scena.
+    auto addBox = [&](const std::string & id, double sx, double sy, double sz,
+                      double px, double py, double pz) {
+      moveit_msgs::msg::CollisionObject o;
+      o.id = id;
+      o.header.frame_id = "world";
+      shape_msgs::msg::SolidPrimitive prim;
+      prim.type = prim.BOX;
+      prim.dimensions = {sx, sy, sz};
+      geometry_msgs::msg::Pose ps;
+      ps.position.x = px; ps.position.y = py; ps.position.z = pz;
+      ps.orientation.w = 1.0;
+      o.primitives.push_back(prim);
+      o.primitive_poses.push_back(ps);
+      o.operation = o.ADD;
+      objects.push_back(o);
+    };
 
-    moveit_msgs::msg::CollisionObject table;
-    table.id = "table";
-    table.header.frame_id = "world";
-    shape_msgs::msg::SolidPrimitive table_prim;
-    table_prim.type = table_prim.BOX;
-    table_prim.dimensions = {1.2, 1.2, 0.02};
-    geometry_msgs::msg::Pose table_pose;
-    table_pose.position.x = 0.5;
-    table_pose.position.y = 0.0;
-    table_pose.position.z = -0.01;
-    table_pose.orientation.w = 1.0;
-    table.primitives.push_back(table_prim);
-    table.primitive_poses.push_back(table_pose);
-    table.operation = table.ADD;
-    objects.push_back(table);
+    // Ostacolo e tavolo: descritti da parametri (adattabili al laboratorio reale).
+    auto od = this->get_parameter("obstacle_dimensions").as_double_array();
+    auto op = this->get_parameter("obstacle_position").as_double_array();
+    auto td = this->get_parameter("table_dimensions").as_double_array();
+    auto tp = this->get_parameter("table_position").as_double_array();
+    double cs = this->get_parameter("cube_size").as_double();
 
-    moveit_msgs::msg::CollisionObject cube;
-    cube.id = "cube";
-    cube.header.frame_id = "world";
-    shape_msgs::msg::SolidPrimitive cube_prim;
-    cube_prim.type = cube_prim.BOX;
-    cube_prim.dimensions = {0.04, 0.04, 0.04};
-    geometry_msgs::msg::Pose cube_pose_msg;
-    cube_pose_msg.position.x = cx;
-    cube_pose_msg.position.y = cy;
-    cube_pose_msg.position.z = cz;
-    cube_pose_msg.orientation.w = 1.0;
-    cube.primitives.push_back(cube_prim);
-    cube.primitive_poses.push_back(cube_pose_msg);
-    cube.operation = cube.ADD;
-    objects.push_back(cube);
+    addBox("obstacle", od[0], od[1], od[2], op[0], op[1], op[2]);
+    addBox("table",    td[0], td[1], td[2], tp[0], tp[1], tp[2]);
+    // Cubo: dimensione da parametro, posizione dal detector.
+    addBox("cube",     cs, cs, cs, cx, cy, cz);
 
     psi.applyCollisionObjects(objects);
     RCLCPP_INFO(this->get_logger(), "Planning scene configurata");
@@ -439,6 +430,12 @@ private:
     const std::vector<geometry_msgs::msg::Pose> & waypoints,
     const std::string & label)
   {
+    // Assestamento + re-seed dello start state prima del path cartesiano:
+    // evita "start point deviates from current robot state" quando il
+    // movimento precedente ha un moto residuo. Rilevante sul reale (inerzia).
+    rclcpp::sleep_for(300ms);
+    mg.setStartStateToCurrentState();
+
     moveit_msgs::msg::RobotTrajectory trajectory;
     double fraction = mg.computeCartesianPath(waypoints, 0.01, 0.0, trajectory);
 
