@@ -185,6 +185,15 @@ public:
   bool cartesianMove(const std::vector<geometry_msgs::msg::Pose> & waypoints,
                      const std::string & label)
   {
+    // Assestamento: il movimento precedente puo' avere un moto residuo. Il
+    // path cartesiano e' rigido sul punto di partenza (tolleranza 0.01 rad in
+    // esecuzione), quindi attendiamo che il braccio si fermi e ri-ancoriamo
+    // lo start state allo stato CORRENTE prima di calcolare. Evita l'errore
+    // "start point deviates from current robot state". Rilevante sul reale,
+    // dove l'inerzia rende l'assestamento piu' lento.
+    rclcpp::sleep_for(300ms);
+    move_group_->setStartStateToCurrentState();
+
     moveit_msgs::msg::RobotTrajectory trajectory;
     double fraction = move_group_->computeCartesianPath(waypoints, 0.01, 0.0, trajectory);
     if (fraction < 0.9) {
