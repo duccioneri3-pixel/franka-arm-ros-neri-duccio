@@ -62,6 +62,12 @@ public:
     declare_parameter("table_position",      std::vector<double>{0.5, 0.0, -0.01});
     declare_parameter("cube_size", 0.04);
 
+    // Posa di riposo (ready) come parametro: 7 angoli giunto in radianti.
+    // Default = posa di ready standard FR3. Sul reale puo' essere ridefinita
+    // (es. posa piu' conservativa per il laboratorio) senza ricompilare.
+    declare_parameter("home_joint_positions",
+      std::vector<double>{0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398});
+
     gripper_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
       this, "/fr3_gripper/follow_joint_trajectory");
     cube_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -260,7 +266,7 @@ public:
   bool goHome()
   {
     RCLCPP_INFO(get_logger(), "[RECOVERY] GoHome: ritorno alla posa di ready...");
-    std::vector<double> ready = {0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398};
+    std::vector<double> ready = get_parameter("home_joint_positions").as_double_array();
     move_group_->setJointValueTarget(ready);
     int retries = static_cast<int>(get_parameter("planning_retries").as_int());
     if (retries < 1) retries = 1;
