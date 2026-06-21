@@ -54,7 +54,7 @@ ament_target_dependencies(planner_bt
 install(TARGETS planner_node planner_bt
   DESTINATION lib/${PROJECT_NAME}
 )
-install(DIRECTORY launch
+install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
 if(BUILD_TESTING)

@@ -1,0 +1,28 @@
+# Parametri di scena per il deployment sul braccio reale.
+# Misurare la disposizione fisica del laboratorio e sostituire i valori.
+# Le dimensioni sono [x, y, z] in metri; le posizioni [x, y, z] nel frame "world".
+#
+# Uso:
+#   ros2 launch cube_planner bt_demo.launch.py --ros-args --params-file <path>/scene_real.yaml
+#   (oppure full_demo.launch.py per il planner lineare)
+#
+# NB: i valori qui sotto sono ANCORA quelli della simulazione (placeholder).
+#     Sostituirli con le misure reali prima del deployment.
+
+/**:
+  ros__parameters:
+    # --- Ostacolo centrale ---
+    obstacle_dimensions: [0.5, 0.2, 0.40]   # larghezza, profondita', altezza
+    obstacle_position:   [0.5, 0.0, 0.15]   # centro del box nel frame world
+
+    # --- Tavolo / piano d'appoggio ---
+    table_dimensions:    [1.2, 1.2, 0.02]
+    table_position:      [0.5, 0.0, -0.01]
+
+    # --- Cubo (solo dimensione; la posizione arriva dal detector) ---
+    cube_size: 0.04
+
+    # --- Target di rilascio (dall'altro lato dell'ostacolo) ---
+    target_x: 0.5
+    target_y: -0.3
+    target_z: 0.02
