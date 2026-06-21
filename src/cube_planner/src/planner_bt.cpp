@@ -53,6 +53,15 @@ public:
     declare_parameter("gripper_close", 0.0);
     declare_parameter("planning_retries", 3);
 
+    // --- Parametri di scena (configurabili sim/reale) ---
+    // Default identici alla scena di simulazione. Per l'hardware reale,
+    // sovrascrivere via file YAML con le misure del laboratorio.
+    declare_parameter("obstacle_dimensions", std::vector<double>{0.5, 0.2, 0.40});
+    declare_parameter("obstacle_position",   std::vector<double>{0.5, 0.0, 0.15});
+    declare_parameter("table_dimensions",    std::vector<double>{1.2, 1.2, 0.02});
+    declare_parameter("table_position",      std::vector<double>{0.5, 0.0, -0.01});
+    declare_parameter("cube_size", 0.04);
+
     gripper_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
       this, "/fr3_gripper/follow_joint_trajectory");
     cube_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -125,9 +134,18 @@ public:
       o.primitives.push_back(prim); o.primitive_poses.push_back(ps); o.operation = o.ADD;
       objects.push_back(o);
     };
-    addBox("obstacle", 0.5, 0.2, 0.40, 0.5, 0.0, 0.15);
-    addBox("table",    1.2, 1.2, 0.02, 0.5, 0.0, -0.01);
-    addBox("cube",     0.04, 0.04, 0.04, cx, cy, cz);
+
+    // Ostacolo e tavolo: descritti da parametri (adattabili al laboratorio reale).
+    auto od = get_parameter("obstacle_dimensions").as_double_array();
+    auto op = get_parameter("obstacle_position").as_double_array();
+    auto td = get_parameter("table_dimensions").as_double_array();
+    auto tp = get_parameter("table_position").as_double_array();
+    double cs = get_parameter("cube_size").as_double();
+
+    addBox("obstacle", od[0], od[1], od[2], op[0], op[1], op[2]);
+    addBox("table",    td[0], td[1], td[2], tp[0], tp[1], tp[2]);
+    // Cubo: dimensione da parametro, posizione dal detector (/cube_pose).
+    addBox("cube",     cs, cs, cs, cx, cy, cz);
 
     psi_.applyCollisionObjects(objects);
     RCLCPP_INFO(get_logger(), "Planning scene configurata");
