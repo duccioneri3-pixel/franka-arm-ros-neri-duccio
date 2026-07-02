@@ -7,6 +7,7 @@ from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 import sensor_msgs_py.point_cloud2 as pc2
 import numpy as np
+from collections import deque
 import tf2_ros
 import tf2_geometry_msgs  # noqa: F401  (registra la trasformazione di PoseStamped)
 import cv2
@@ -43,6 +44,13 @@ class CubeDetector(Node):
         self.enabled = True
         self.sub_enable = self.create_subscription(
             Bool, '/detector_enable', self.enable_cb, 10)
+
+        # Filtro temporale sulla posa: buffer delle ultime N pose (in world),
+        # pubblichiamo la mediana componente-per-componente. Smorza il rumore
+        # frame-a-frame e scarta gli outlier (letture sballate isolate).
+        self.declare_parameter('pose_filter_window', 5)
+        win = self.get_parameter('pose_filter_window').value
+        self.pose_buffer = deque(maxlen=max(1, int(win)))
 
     def enable_cb(self, msg):
         if self.enabled != msg.data:
@@ -157,9 +165,17 @@ class CubeDetector(Node):
                 pose_camera, 'world',
                 timeout=rclpy.duration.Duration(seconds=1.0))
 
+            # Accumula la posa nel buffer e pubblica la MEDIANA temporale.
+            p = pose_world.pose.position
+            self.pose_buffer.append([p.x, p.y, p.z])
+            med = np.median(np.array(self.pose_buffer, dtype=np.float64), axis=0)
+            pose_world.pose.position.x = float(med[0])
+            pose_world.pose.position.y = float(med[1])
+            pose_world.pose.position.z = float(med[2])
+
             self.pub_pose.publish(pose_world)
             self.get_logger().info(
-                f'Cube pose in world: '
+                f'Cube pose in world (filt, n={len(self.pose_buffer)}): '
                 f'x={pose_world.pose.position.x:.3f} '
                 f'y={pose_world.pose.position.y:.3f} '
                 f'z={pose_world.pose.position.z:.3f}')
