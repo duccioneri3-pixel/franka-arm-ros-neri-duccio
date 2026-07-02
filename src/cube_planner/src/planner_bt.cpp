@@ -44,7 +44,10 @@ public:
     declare_parameter("target_y", -0.3);
     declare_parameter("target_z", 0.02);
     declare_parameter("pregrasp_offset", 0.12);
-    declare_parameter("grasp_offset", -0.035);
+    declare_parameter("grasp_offset", -0.015);  // alzato da -0.035: -0.035 portava
+    // il TCP a ~5mm dal tavolo, zona di collisione dita/tavolo -> OMPL non
+    // campionava stati validi per il goal. A -0.015 il TCP e' a ~2.5cm dal
+    // tavolo, le dita circondano comunque il cubo (lato 4cm).
     declare_parameter("lift_offset", 0.35);
     declare_parameter("transport_offset", 0.45);
     declare_parameter("place_offset", 0.06);
@@ -74,6 +77,13 @@ public:
     // gripper si e' chiuso a vuoto -> presa fallita. Tolleranza configurabile.
     declare_parameter("grasp_check_tolerance", 0.015);  // m, scarto ammesso da cube_size
     declare_parameter("grasp_check_enabled", true);     // disattivabile se serve
+
+    // Soglia minima di completamento del path cartesiano del LIFT per accettarlo
+    // senza cadere su OMPL. Il lift e' verticale: anche un completamento parziale
+    // alza il cubo dal tavolo ed e' utile. Piu' bassa della soglia generale (0.9)
+    // perche' qui un 80% e' comunque un sollevamento valido, ed evita il fallback
+    // OMPL che su questo movimento fallisce spesso (goal tree non campionabile).
+    declare_parameter("lift_cartesian_min_fraction", 0.8);
 
     gripper_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
       this, "/fr3_gripper/follow_joint_trajectory");
@@ -210,7 +220,7 @@ public:
   }
 
   bool cartesianMove(const std::vector<geometry_msgs::msg::Pose> & waypoints,
-                     const std::string & label)
+                     const std::string & label, double min_fraction = 0.9)
   {
     // Assestamento: il movimento precedente puo' avere un moto residuo. Il
     // path cartesiano e' rigido sul punto di partenza (tolleranza 0.01 rad in
@@ -223,9 +233,9 @@ public:
 
     moveit_msgs::msg::RobotTrajectory trajectory;
     double fraction = move_group_->computeCartesianPath(waypoints, 0.01, 0.0, trajectory);
-    if (fraction < 0.9) {
-      RCLCPP_ERROR(get_logger(), "Cartesian [%s] %.0f%% — fallback movePose",
-                   label.c_str(), fraction * 100.0);
+    if (fraction < min_fraction) {
+      RCLCPP_ERROR(get_logger(), "Cartesian [%s] %.0f%% (<%.0f%%) — fallback movePose",
+                   label.c_str(), fraction * 100.0, min_fraction * 100.0);
       return movePose(waypoints.back(), label + "_fallback");
     }
     MoveGroupInterface::Plan plan;
@@ -464,7 +474,9 @@ public:
       r->makePose(cx, cy, cz + r->p("grasp_offset")),
       r->makePose(cx, cy, cz + r->p("lift_offset"))
     };
-    return BT_OK(r->cartesianMove(wp, "lift"));
+    // Soglia abbassata: un lift verticale parziale alza comunque il cubo,
+    // meglio che cadere su OMPL (che qui fallisce spesso).
+    return BT_OK(r->cartesianMove(wp, "lift", r->p("lift_cartesian_min_fraction")));
   }
 };
 
