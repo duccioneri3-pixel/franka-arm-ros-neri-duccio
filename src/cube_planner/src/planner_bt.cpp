@@ -268,7 +268,18 @@ public:
 
   bool detachCube()
   {
-    move_group_->detachObject("cube"); rclcpp::sleep_for(500ms); return true;
+    // Stacca il cubo dal gripper E lo rimuove dalla planning scene.
+    // Il solo detachObject scollega ma lascia il cubo-oggetto nella posizione
+    // di presa (tra le dita): i movimenti successivi (post-release-lift,
+    // retreat, GoHome) lo troverebbero in collisione con fr3_hand e non
+    // potrebbero pianificare. Rimuovendolo, la scena resta pulita dopo il
+    // rilascio. (Il cubo reale e' gia' posato sul target; nel modello di
+    // planning non serve piu'.)
+    move_group_->detachObject("cube");
+    rclcpp::sleep_for(300ms);
+    psi_.removeCollisionObjects({"cube"});
+    rclcpp::sleep_for(300ms);
+    return true;
   }
 
   // Verifica sensoriale della presa: confronta la larghezza misurata del
