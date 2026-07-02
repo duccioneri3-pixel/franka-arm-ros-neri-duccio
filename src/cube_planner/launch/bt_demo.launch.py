@@ -16,12 +16,15 @@ def generate_launch_description():
     set_libgl = SetEnvironmentVariable('LIBGL_ALWAYS_SOFTWARE', '1')
     set_mesa = SetEnvironmentVariable('MESA_GL_VERSION_OVERRIDE', '3.3')
 
+    # Usa la NOSTRA copia del launch di simulazione, con allowed_start_tolerance
+    # rilassato (0.05) per l'assestamento del braccio simulato. L'originale del
+    # dottorando resta intatto in franka_gazebo_bringup.
     gazebo_moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                get_package_share_directory('franka_gazebo_bringup'),
+                get_package_share_directory('cube_planner'),
                 'launch',
-                'moveit_gazebo_franka_arm_example_controller.launch.py'
+                'moveit_gazebo_custom_tolerance.launch.py'
             )
         )
     )
