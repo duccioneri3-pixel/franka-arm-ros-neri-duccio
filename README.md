@@ -152,6 +152,12 @@ https://moveit.picknik.ai/main/doc/tutorials/planning_around_objects/planning_ar
 <!-- Drag-and-drop your simulation videos here when editing this README on GitHub.
      GitHub will host them and embed a playable link. Keep clips short (~10MB). -->
 
+https://github.com/user-attachments/assets/efc5642c-2c9a-4f78-abaa-99196bcb7bdc
+
+
+
+
+
 _Simulation videos to be added._
 
 ## License
