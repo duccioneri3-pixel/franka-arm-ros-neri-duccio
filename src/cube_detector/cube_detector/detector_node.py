@@ -3,6 +3,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, PointCloud2
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 import sensor_msgs_py.point_cloud2 as pc2
 import numpy as np
@@ -39,6 +40,15 @@ class CubeDetector(Node):
             10)
 
         self.get_logger().info('Cube detector started')
+        self.enabled = True
+        self.sub_enable = self.create_subscription(
+            Bool, '/detector_enable', self.enable_cb, 10)
+
+    def enable_cb(self, msg):
+        if self.enabled != msg.data:
+            self.get_logger().info(
+                'Detection ' + ('abilitata' if msg.data else 'disabilitata'))
+        self.enabled = msg.data
 
     def pc_cb(self, msg):
         self.latest_pc = msg
@@ -102,6 +112,8 @@ class CubeDetector(Node):
         return np.median(np.array(pts, dtype=np.float64), axis=0)
 
     def image_cb(self, msg):
+        if not self.enabled:
+            return
         if self.latest_pc is None:
             return
 

@@ -15,6 +15,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "moveit/move_group_interface/move_group_interface.h"
 #include "moveit/planning_scene_interface/planning_scene_interface.h"
 #include "moveit_msgs/msg/collision_object.hpp"
@@ -94,6 +95,7 @@ public:
     js_sub_ = create_subscription<sensor_msgs::msg::JointState>(
       "/joint_states", 10,
       std::bind(&BtRosNode::jointStateCallback, this, std::placeholders::_1));
+    detector_enable_pub_ = create_publisher<std_msgs::msg::Bool>("/detector_enable", 10);
 
     RCLCPP_INFO(get_logger(), "BtRosNode avviato");
   }
@@ -246,13 +248,21 @@ public:
     RCLCPP_INFO(get_logger(), "Cartesian [%s] OK (%.0f%%)", label.c_str(), fraction * 100.0);
     return true;
   }
-
+// Abilita/disabilita il detector via topic. Dopo il grasp lo spegniamo:
+  // il cubo e' tra le dita, cercarlo a terra e' inutile e riempie i log.
+  void setDetector(bool on)
+  {
+    std_msgs::msg::Bool m; m.data = on;
+    detector_enable_pub_->publish(m);
+    RCLCPP_INFO(get_logger(), "[detector] %s", on ? "abilitato" : "disabilitato");
+  }
   bool attachCube()
   {
     std::vector<std::string> touch = {"fr3_hand", "fr3_leftfinger", "fr3_rightfinger"};
     if (!move_group_->attachObject("cube", "fr3_hand", touch)) {
       RCLCPP_ERROR(get_logger(), "Attach FALLITO"); return false;
     }
+    setDetector(false);  // cubo afferrato: spegni la detection
     rclcpp::sleep_for(1s); return true;
   }
 
@@ -371,6 +381,7 @@ private:
   std::mutex cube_mutex_;
 
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr js_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr detector_enable_pub_;
   double finger1_ = 0.0, finger2_ = 0.0;
   bool js_received_ = false;
   std::mutex js_mutex_;
