@@ -194,7 +194,10 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # Chiudi rclpy solo se ancora attivo: al Ctrl-C rclpy puo' aver gia'
+        # chiuso il context, e una seconda shutdown() solleverebbe RCLError.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
