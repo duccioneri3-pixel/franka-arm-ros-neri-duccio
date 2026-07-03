@@ -328,14 +328,14 @@ public:
     // L'executor gira gia' in un thread separato: NON spinnare qui (il nodo
     // e' gia' nell'executor). Aspettiamo solo i future, che l'executor avanza.
     auto sf = gripper_client_->async_send_goal(goal);
-    if (sf.wait_for(5s) != std::future_status::ready) {
+    if (sf.wait_for(10s) != std::future_status::ready) {  // 10s: margine per sim rallentata
       RCLCPP_WARN(get_logger(), "Gripper %s: goal non inviato in tempo", label.c_str());
       return false;
     }
     auto gh = sf.get();
     if (!gh) { RCLCPP_WARN(get_logger(), "Gripper %s rifiutato", label.c_str()); return false; }
     auto rf = gripper_client_->async_get_result(gh);
-    if (rf.wait_for(10s) != std::future_status::ready) {
+    if (rf.wait_for(20s) != std::future_status::ready) {  // 20s: margine per sim rallentata (PC sotto carico); sul reale il gripper e' veloce
       RCLCPP_WARN(get_logger(), "Gripper %s: timeout risultato", label.c_str());
       return false;
     }
@@ -520,9 +520,16 @@ public:
   static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus tick() override {
     auto r = rosOf(*this);
-    return BT_OK(r->movePose(
-      r->makePose(r->p("target_x"), r->p("target_y"), r->p("target_z") + r->p("place_offset")),
-      "place"));
+    // Place come discesa CARTESIANA verticale: il Transport ha gia' portato il
+    // braccio sopra il target (a transport_offset), oltre l'ostacolo. Da li'
+    // scendiamo DRITTI a place_offset, senza i giri di RRTConnect (che qui,
+    // in zona libera, sarebbero movimenti inutili a destra/sinistra).
+    // Fallback su OMPL (via soglia) se la retta non e' valida.
+    std::vector<geometry_msgs::msg::Pose> wp = {
+      r->makePose(r->p("target_x"), r->p("target_y"), r->p("target_z") + r->p("transport_offset")),
+      r->makePose(r->p("target_x"), r->p("target_y"), r->p("target_z") + r->p("place_offset"))
+    };
+    return BT_OK(r->cartesianMove(wp, "place", r->p("lift_cartesian_min_fraction")));
   }
 };
 
@@ -532,10 +539,16 @@ public:
   static BT::PortsList providedPorts() { return {}; }
   BT::NodeStatus tick() override {
     auto r = rosOf(*this);
-    return BT_OK(r->movePose(
+    // Risalita CARTESIANA verticale dopo il rilascio: sale DRITTA dalla posa di
+    // rilascio, senza i giri di RRTConnect (zona libera, oltre l'ostacolo).
+    // Simmetrico al Place. Qui il cubo e' gia' staccato e rimosso dalla scena,
+    // quindi la salita e' ancora piu' pulita. Fallback OMPL via soglia.
+    std::vector<geometry_msgs::msg::Pose> wp = {
+      r->makePose(r->p("target_x"), r->p("target_y"), r->p("target_z") + r->p("place_offset")),
       r->makePose(r->p("target_x"), r->p("target_y"),
-                  r->p("target_z") + r->p("place_offset") + r->p("release_lift_offset")),
-      "post-release-lift"));
+                  r->p("target_z") + r->p("place_offset") + r->p("release_lift_offset"))
+    };
+    return BT_OK(r->cartesianMove(wp, "post-release-lift", r->p("lift_cartesian_min_fraction")));
   }
 };
 
