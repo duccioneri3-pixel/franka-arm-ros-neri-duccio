@@ -22,9 +22,6 @@ sensing-based grasp verification.
 
 <!-- trascina qui il video della demo completa -->
 
-**Recovery behavior (fail-safe):**
-
-<!-- trascina qui il video del recovery, se ce l'hai -->
 
 ---
 
