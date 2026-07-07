@@ -22,6 +22,10 @@ sensing-based grasp verification.
 
 <!-- trascina qui il video della demo completa -->
 
+https://github.com/user-attachments/assets/779daef8-2916-4bd3-8179-017ce6da07d2
+
+
+
 
 ---
 
