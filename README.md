@@ -14,6 +14,14 @@ sensing-based grasp verification.
 
 > 📄 A full technical report (design, evaluation, results) is available in
 > [`report/main.pdf`](report/main.pdf).
+---
+
+## 🎥 Demo videos
+
+**Full pick-and-place run:**
+
+<!-- trascina qui il video della demo completa -->
+
 
 ---
 
