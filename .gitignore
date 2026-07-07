@@ -34,3 +34,11 @@ images/
 
 # Benchmark: ignora i log ROS completi (pesanti), tieni i CSV dei risultati
 benchmark_results/**/*.log
+
+# File di debug/temporanei
+frames_*.gv
+frames_*.pdf
+frames.pdf
+frames.gv
+*.bak_*
+README.md.bak*
